@@ -1,0 +1,24 @@
+#!/bin/bash
+# vim: ft=sh
+
+set -e
+
+BTRFS_TOP="/root/btrfs-top-lvl"
+SUBVOL="root"
+
+mount "${BTRFS_TOP}"
+
+# Make snapshot of root
+btrfs subvolume snapshot / "${BTRFS_TOP}/root-snap"
+
+LOOP_DEV=$(losetup -f -P --show $1)
+mount -o ro,subvol="${SUBVOL}" $LOOP_DEV /mnt/img
+
+run-parts /etc/svup/pre.d/ || true
+
+rsync /mnt/img "${BTRFS_TOP}/root-snap/" -f '. /etc/svup/upgrade.filter' --delete --inplace -aAXHN --one-file-system
+
+run-parts /etc/svup/post.d/ || true
+
+umount /mnt/img
+losetup -d $LOOP_DEV
