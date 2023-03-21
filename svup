@@ -3,22 +3,175 @@
 
 set -e
 
-BTRFS_TOP="/root/btrfs-top-lvl"
-SUBVOL="root"
+function usage_install {
+    printf "%s install IMAGE\n" ${0##*/}
+}
 
-mount "${BTRFS_TOP}"
+function usage_list {
+    printf "%s list\n" ${0##*/}
+}
 
-# Make snapshot of root
-btrfs subvolume snapshot / "${BTRFS_TOP}/root-snap"
+function usage_stage {
+    printf "%s stage SNAPSHOT\n" ${0##*/}
+}
 
-LOOP_DEV=$(losetup -f -P --show $1)
-mount -o ro,subvol="${SUBVOL}" $LOOP_DEV /mnt/img
+function usage_unstage {
+    printf "%s unstage\n" ${0##*/}
+}
 
-run-parts /etc/svup/pre.d/ || true
+function usage_reboot {
+    printf "%s reboot\n" ${0##*/}
+}
 
-rsync /mnt/img "${BTRFS_TOP}/root-snap/" -f '. /etc/svup/upgrade.filter' --delete --inplace -aAXHN --one-file-system
+function usage_persist {
+    printf "%s persist\n" ${0##*/}
+}
 
-run-parts /etc/svup/post.d/ || true
+function usage_all {
+    printf "Usage:\n"
+    printf "%s [global] <command> [<args>]\n" ${0##*/}
+    cat <<EOF
 
-umount /mnt/img
-losetup -d $LOOP_DEV
+Global Options:
+    -h  Show this help message
+    -v  Verbose output
+
+Usage of subcommands:
+
+    $(usage_install)
+        Install IMAGE under a new snapshot
+    $(usage_list)
+        List all currently installed images
+    $(usage_stage)
+        Prepare a snapshot for booting with ${0##*/} reboot
+    $(usage_unstage)
+        Unstage the currently staged version again
+    $(usage_reboot)
+        Try booting into the staged version
+    $(usage_persist)
+        Confirm that the new version works and make it persistent across regular reboots
+EOF
+}
+
+
+function install_img {
+    local OPTA=0
+    local OPTB=0
+    while getopts 'ab' OPTION
+    do
+        case ${OPTION} in
+            a) OPTA=1
+                ;;
+            b) OPTB=1
+                ;;
+            ?) printf "Usage:\n%s\n" "$(usage_install)" >&2
+                exit 2
+                ;;
+        esac
+    done
+    shift $((${OPTIND} - 1))
+    unset OPTIND
+
+    if [[ $# != 1 ]]; then
+        printf "Missing image path\n%s\n" "$(usage_install)" >&2
+        exit 2
+    fi
+    local IMAGE_PATH="$1"
+
+    #TODO Image validation
+    #TODO Cleanup when encountering error (trap)
+    local LOOP_DEV=$(losetup -f -P --show "${IMAGE_PATH}")
+    IMAGE_MOUNT="/mnt/svup/image"
+    mkdir -p ${IMAGE_MOUNT}
+    #TODO What is the root subvolume in the image named?
+    mount -o ro,subvol=root ${LOOP_DEV} ${IMAGE_MOUNT}
+
+    ROOT_DEV="$(findmnt -nv -o source /)"
+    BTRFS_MOUNT="/mnt/svup/btrfs"
+    mount -t btrfs "${ROOT_DEV}" "${BTRFS_MOUNT}"
+
+    #TODO Actual snapshot name
+    btrfs subvolume snapshot / "${BTRFS_MOUNT}/root-snapshot"
+
+    # Copy over files
+    #TODO Everything about this command
+    rsync "${IMAGE_MOUNT}" "${BTRFS_MOUNT}/root-snapshot/" \
+        -f '. /etc/svup/upgrade.filter' \
+        --delete --inplace -aAXHN --one-file-system
+
+    # Cleanup
+    umount "${IMAGE_MOUNT}"
+    losetup -d "${LOOP_DEV}"
+    # Maybe don't unmount just yet?
+    umount "${BTRFS_MOUNT}"
+}
+
+function list_images {
+    echo "list list list"
+}
+
+function stage {
+    echo "stage for booting!"
+}
+
+function unstage {
+    echo "Nevermind, not just yet, unstage"
+}
+
+function boot_into {
+    echo "Rebooting"
+    reboot '0 tryboot'
+}
+
+function persist {
+    echo "Okay, apparently this installation is valid"
+}
+
+VERBOSE=0
+QUIET=0
+
+while getopts 'vh' OPTION
+do
+    case ${OPTION} in
+        v) VERBOSE=1
+            ;;
+        h) usage_all
+            exit 0
+            ;;
+        ?) printf "Invalid!\n" >&2
+            exit 2
+            ;;
+    esac
+done
+
+shift $((${OPTIND} - 1))
+unset OPTIND
+
+if [[ "${VERBOSE}" == 1 ]]; then
+    echo "Verbose!"
+fi
+
+if [[ "${QUIET}" == 1 ]]; then
+    echo "quiet"
+fi
+
+FUNCTION=$1
+shift
+
+case ${FUNCTION} in
+    install) install_img $@
+        ;;
+    list) list_images $@
+        ;;
+    stage) stage $@
+        ;;
+    unstage) unstage $@
+        ;;
+    reboot) boot_into $@
+        ;;
+    persist) persist $@
+        ;;
+    *) printf "Function ${FUNCTION} not recognized\n" >&2
+        exit 2
+        ;;
+esac
