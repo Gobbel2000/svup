@@ -19,7 +19,7 @@ function usage_prune {
 }
 
 function usage_stage {
-    printf "%s stage SNAPSHOT\n" ${0##*/}
+    printf "%s stage [-f] SNAPSHOT\n" ${0##*/}
 }
 
 function usage_unstage {
@@ -53,13 +53,16 @@ $(usage_prune)
     Prune subvolumes with unused installations, keeping KEEP newest volumes.
     Defaults to keeping 3 volumes.
 $(usage_stage)
-    Prepare a snapshot for booting with ${0##*/} reboot
+    Prepare a snapshot for booting with ${0##*/} reboot.
+    If -f (force) is specified, overwrite any existing configuration for
+    another subvolume.
 $(usage_unstage)
     Unstage the currently staged version again
 $(usage_reboot)
     Try booting into the staged version
 $(usage_persist)
-    Confirm that the new version works and make it persistent across regular reboots
+    Confirm that the new version works and make it persistent across regular
+    reboots.
 EOF
 }
 
@@ -155,14 +158,47 @@ function prune_subvolumes {
 }
 
 function stage {
-    echo "stage for booting!"
+    local FORCE=0
+    while getopts 'f' OPTION
+    do
+        case ${OPTION} in
+            f) FORCE=1
+                ;;
+            ?) printf "Usage:\n%s\n" "$(usage_stage)" >&2
+                exit 2
+                ;;
+        esac
+    done
+    shift $((${OPTIND} - 1))
+    unset OPTIND
 
+    if [[ $# != 1 ]]; then
+        printf "No subvolume to stage specified. Usage:\n%s\n" "$(usage_stage)" >&2
+        exit 2
+    fi
     local SUBVOL=$1
+
+    if [[ -f /boot/tryboot.txt ]]; then
+        if [[ ${FORCE} == 1 ]]; then
+            echo "A subvolume is already staged, overwriting..."
+            unstage
+        else
+            echo "A subvolume is already staged. Overwrite with -f" >&2
+            exit 2
+        fi
+    fi
+
     mount_btrfs_top
+
+    cp /boot/config.txt /boot/tryboot.txt
+    echo "os_prefix=tryboot" >> /boot/tryboot.txt
+    mv -r "${SUBVOL}/boot-save" /boot/tryboot
+    printf "Staged %s. Run the installation with '%s reboot'.\n" "${SUBVOL}" ${0##*/}
 }
 
 function unstage {
-    echo "Nevermind, not just yet, unstage"
+    rm -rf /boot/tryboot
+    rm -f /boot/tryboot.txt
 }
 
 function boot_into {
@@ -171,7 +207,9 @@ function boot_into {
 }
 
 function persist {
-    echo "Okay, apparently this installation is valid"
+    rsync -ra /boot/tryboot/ /boot/ --delete
+    unstage
+    printf "Installation will now persist across regular reboots"
 }
 
 VERBOSE=0
