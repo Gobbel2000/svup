@@ -7,7 +7,7 @@ set -e
 BTRFS_TOP_MOUNT="/root/btrfs-top-lvl"
 
 function usage_install {
-    printf "%s install IMAGE\n" ${0##*/}
+    printf "%s install [-s] [-b BASE] IMAGE\n" ${0##*/}
 }
 
 function usage_list {
@@ -46,7 +46,10 @@ Global Options:
 Usage of subcommands:
 
 $(usage_install)
-    Install IMAGE under a new snapshot
+    Install IMAGE under a new snapshot.
+    -s also stages that installation afterwards.
+    A different base subvolume can be specified with -b which will be the basis
+    for the snapshot instead of the currently running subvolume.
 $(usage_list)
     List all currently installed images
 $(usage_prune)
@@ -77,10 +80,13 @@ function mount_btrfs_top {
 
 function install_img {
     local STAGE=0
-    while getopts 's' OPTION
+    local BASE="/"
+    while getopts 'sb:' OPTION
     do
         case ${OPTION} in
             s) STAGE=1
+                ;;
+            b) BASE="${OPTARG}"
                 ;;
             ?) printf "Usage:\n%s\n" "$(usage_install)" >&2
                 exit 2
@@ -117,21 +123,25 @@ function install_img {
         echo "Partial installation from a previous aborted run found. Deleting..."
         btrfs subvolume delete "${SNAPSHOT_TEMP}"
     fi
-    btrfs subvolume snapshot / "${SNAPSHOT_TEMP}"
+    btrfs subvolume snapshot "${BASE}" "${SNAPSHOT_TEMP}"
 
     # Copy over files
     #TODO Everything about this command
-    rsync "${IMAGE_MOUNT}" "${SNAPSHOT_TEMP}" \
+    rsync --delete --inplace -aAXH \
         -f '. /usr/share/svup/upgrade.filter' \
-        --delete --inplace -aAXHN \
-        --info=stats2,progress2,misc1,flist0
+        --info=stats2,progress2,misc1,flist0 \
+        "${IMAGE_MOUNT}/" "${SNAPSHOT_TEMP}"
 
     # Modify /etc/fstab
     sed -i "s|subvol=/root|subvol=/${SNAPSHOT_NAME}|" "${SNAPSHOT_TEMP}/etc/fstab"
 
     # Put /boot into /boot-save
-    rsync -a "${SNAPSHOT_PATH}/boot" "${SNAPSHOT_PATH}/boot-save"
-    sed -i "s|subvol=/root|subvol=/${SNAPSHOT_NAME}|" "${SNAPSHOT_TEMP}/boot-save/cmdline.txt"
+    rsync -a "${IMAGE_MOUNT}/boot/" "${SNAPSHOT_TEMP}/boot-save"
+    # Tell kernel which subvolume to boot and remove firstboot script as init
+    sed -i "s|subvol=\S*|subvol=/${SNAPSHOT_NAME}|
+            s| init=\S*||
+            s| quiet||" \
+        "${SNAPSHOT_TEMP}/boot-save/cmdline.txt"
 
     mv "${SNAPSHOT_TEMP}" "${SNAPSHOT_PATH}"
     printf "Created new installation as subvolume %s\n" "${SNAPSHOT_NAME}"
@@ -160,7 +170,7 @@ function prune_subvolumes {
     while getopts 'k:' OPTION
     do
         case ${OPTION} in
-            k) N_KEEP=1
+            k) N_KEEP="${OPTARG}"
                 ;;
             ?) printf "Usage:\n%s\n" "$(usage_prune)" >&2
                 exit 2
@@ -208,7 +218,7 @@ function stage {
 
     cp /boot/config.txt /boot/tryboot.txt
     echo "os_prefix=tryboot" >> /boot/tryboot.txt
-    rsync -a "${SUBVOL}/boot-save" /boot/tryboot
+    rsync -a "${SUBVOL}/boot-save/" /boot/tryboot
     printf "Staged %s. Run the installation with '%s reboot'.\n" "${SUBVOL}" ${0##*/}
 }
 
