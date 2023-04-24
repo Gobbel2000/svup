@@ -70,7 +70,7 @@ EOF
 # Ensures btrfs top-level subvolume is mounted
 function mount_btrfs_top {
     ROOT_DEV="$(findmnt -nv -o source /)"
-    if ! findmnt "${BTRFS_TOP_MOUNT}"; then
+    if ! findmnt "${BTRFS_TOP_MOUNT}" > /dev/null; then
         mount -t btrfs "${ROOT_DEV}" "${BTRFS_TOP_MOUNT}"
     fi
 }
@@ -95,42 +95,58 @@ function install_img {
         exit 2
     fi
     local IMAGE_PATH="$1"
+    IMAGE_MOUNT="/mnt/svup/image"
 
     #TODO Image validation
-    #TODO Cleanup when encountering error (trap)
-    local LOOP_DEV=$(losetup -f -P --show "${IMAGE_PATH}")
-    IMAGE_MOUNT="/mnt/svup/image"
+
+    LOOP_DEV=$(losetup -f -P --show "${IMAGE_PATH}")
+
+    # Unmount image when encountering any error
+    trap 'echo "An error occured during installation, cleaning up"; _clean_install' ERR
+
     mkdir -p ${IMAGE_MOUNT}
     mount -o ro,subvol=/root -t btrfs "${LOOP_DEV}p2" ${IMAGE_MOUNT}
-    #TODO Does this work in a ro fs?
     mount -o ro -t vfat "${LOOP_DEV}p1" "${IMAGE_MOUNT}/boot"
 
     mount_btrfs_top
 
     local SNAPSHOT_NAME="root-$(date +%FT%T)"
     local SNAPSHOT_PATH="${BTRFS_TOP_MOUNT}/${SNAPSHOT_NAME}"
-    btrfs subvolume snapshot / "${SNAPSHOT_PATH}"
+    local SNAPSHOT_TEMP="${BTRFS_TOP_MOUNT}/root-temp"
+    if [[ -e "${SNAPSHOT_TEMP}" ]]; then
+        echo "Partial installation from a previous aborted run found. Deleting..."
+        btrfs subvolume delete "${SNAPSHOT_TEMP}"
+    fi
+    btrfs subvolume snapshot / "${SNAPSHOT_TEMP}"
 
     # Copy over files
     #TODO Everything about this command
-    rsync "${IMAGE_MOUNT}" "${SNAPSHOT_PATH}" \
-        -f '. /etc/svup/upgrade.filter' \
-        --delete --inplace -aAXHN
+    rsync "${IMAGE_MOUNT}" "${SNAPSHOT_TEMP}" \
+        -f '. /usr/share/svup/upgrade.filter' \
+        --delete --inplace -aAXHN \
+        --info=stats2,progress2,misc1,flist0
 
     # Modify /etc/fstab
-    sed -i "s|subvol=/root|subvol=/${SNAPSHOT_NAME}|" "${SNAPSHOT_PATH}/etc/fstab"
+    sed -i "s|subvol=/root|subvol=/${SNAPSHOT_NAME}|" "${SNAPSHOT_TEMP}/etc/fstab"
 
     # Put /boot into /boot-save
-    mv "${SNAPSHOT_PATH}/boot" "${SNAPSHOT_PATH}/boot-save"
-    sed -i "s|subvol=/root|subvol=/${SNAPSHOT_NAME}|" "${SNAPSHOT_PATH}/boot-save/cmdline.txt"
+    rsync -a "${SNAPSHOT_PATH}/boot" "${SNAPSHOT_PATH}/boot-save"
+    sed -i "s|subvol=/root|subvol=/${SNAPSHOT_NAME}|" "${SNAPSHOT_TEMP}/boot-save/cmdline.txt"
 
-    # Cleanup
-    umount "${IMAGE_MOUNT}"
-    losetup -d "${LOOP_DEV}"
+    mv "${SNAPSHOT_TEMP}" "${SNAPSHOT_PATH}"
+    printf "Created new installation as subvolume %s\n" "${SNAPSHOT_NAME}"
+
+    trap - ERR
+    _clean_install
 
     if [[ ${STAGE} == 1 ]]; then
         stage "${SNAPSHOT_NAME}"
     fi
+}
+
+function _clean_install {
+    umount -R "${IMAGE_MOUNT}" || true
+    losetup -d "${LOOP_DEV}" || true
 }
 
 function list_images {
@@ -192,7 +208,7 @@ function stage {
 
     cp /boot/config.txt /boot/tryboot.txt
     echo "os_prefix=tryboot" >> /boot/tryboot.txt
-    mv -r "${SUBVOL}/boot-save" /boot/tryboot
+    rsync -a "${SUBVOL}/boot-save" /boot/tryboot
     printf "Staged %s. Run the installation with '%s reboot'.\n" "${SUBVOL}" ${0##*/}
 }
 
