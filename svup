@@ -223,7 +223,7 @@ function boot_into {
 }
 
 function persist {
-    rsync -ra /boot/tryboot/ /boot/ --delete
+    rsync -a /boot/tryboot/ /boot/ --delete
     unstage
     printf "Installation will now persist across regular reboots"
 }

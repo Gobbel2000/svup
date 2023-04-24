@@ -1,0 +1,13 @@
+# Allow user configuration to add or override any filters
+. /etc/svup/user.filter
+
++ /etc/systemd/system/klipper.service
++ /etc/systemd/system/start_xorg.service
++ /etc/Networkmanager/NetworkManager.conf
++ /etc/X11/Xwrapper.config
+
+# Update and copy new files, but don't delete
+show /etc/X11/xorg.conf.d/*
+
+# Keep everything in /etc untouched by default, with exceptions listed above
+- /etc/

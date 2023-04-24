@@ -1,0 +1,9 @@
+# Filters for subvolume upgrade utility (svup) go here.
+#
+# They should follow the rsync filter syntax described in the FILTER RULES
+# section of rsync(1). This file is merged in the beginning of the default
+# filter list at /usr/share/svup/upgrade.filter, meaning any parts of that file
+# can be overriden here.
+#
+# Prepend a path with '-' to exclude it, meaning it won't be upgraded in a new
+# installation or deleted if it's missing in the install image.
