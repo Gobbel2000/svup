@@ -1,0 +1,3 @@
+svup usr/bin
+upgrade.filter usr/share/svup
+user.filter etc/svup

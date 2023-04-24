@@ -1,0 +1,14 @@
+Source: svup
+Maintainer: Gabriel Vogel <gabriel.vogel@online.de>
+Section: admin
+Priority: optional
+Standards-Version: 4.6.2
+Build-Depends: debhelper (>=9)
+Homepage: https://github.com/Gobbel2000/svup
+
+Package: svup
+Architecture: all
+Depends: rsync
+Description: Upgrade the operating system based off of a disk image file
+ This is done using btrfs snapshots to reduce the required storage space of
+ multiple installations present at once.
