@@ -116,33 +116,45 @@ function install_img {
 
     mount_btrfs_top
 
-    local SNAPSHOT_NAME="root-$(date +%FT%T)"
-    local SNAPSHOT_PATH="${BTRFS_TOP_MOUNT}/${SNAPSHOT_NAME}"
     local SNAPSHOT_TEMP="${BTRFS_TOP_MOUNT}/root-temp"
     if [[ -e "${SNAPSHOT_TEMP}" ]]; then
         echo "Partial installation from a previous aborted run found. Deleting..."
         btrfs subvolume delete "${SNAPSHOT_TEMP}"
     fi
+
+    local LAST_SV=$(ls -vd "${BTRFS_TOP_MOUNT}"/root* | tail -n 1)
+    local N_LAST="${LAST_SV##*root}"
+
+    local SNAPSHOT_NAME="root$((N_LAST + 1))"
+    local SNAPSHOT_PATH="${BTRFS_TOP_MOUNT}/${SNAPSHOT_NAME}"
     btrfs subvolume snapshot "${BASE}" "${SNAPSHOT_TEMP}"
 
-    # Copy over files
-    #TODO Everything about this command
-    rsync --delete --inplace -aAXH \
-        -f '. /usr/share/svup/upgrade.filter' \
+    # Copy over changes
+    rsync --delete --inplace -aAXHx \
+        -f ". ${SNAPSHOT_TEMP}/usr/share/svup/upgrade.filter" \
         --info=stats2,progress2,misc1,flist0 \
         "${IMAGE_MOUNT}/" "${SNAPSHOT_TEMP}"
 
-    # Modify /etc/fstab
-    sed -i "s|subvol=/root|subvol=/${SNAPSHOT_NAME}|" "${SNAPSHOT_TEMP}/etc/fstab"
-
     # Put /boot into /boot-save
     rsync -a "${IMAGE_MOUNT}/boot/" "${SNAPSHOT_TEMP}/boot-save"
-    # Tell kernel which subvolume to boot and remove firstboot script as init
+
+    # Modify /etc/fstab and /boot/cmdline.txt:
+    # Set the correct subvolume and use the current PARTUUID
+    local OLD_DISKID=$(grep -oP "(?<=PARTUUID=)[0-9a-f]+(?=.*\s/\s)" \
+        "${SNAPSHOT_TEMP}/etc/fstab" | head -n 1)
+    local NEW_DISKID=$(lsblk -no PTUUID "${ROOT_DEV}")
+
+    sed -i "s|${OLD_DISKID}|${NEW_DISKID}|
+            s|subvol=/root|subvol=/${SNAPSHOT_NAME}|" \
+        "${SNAPSHOT_TEMP}/etc/fstab"
+    # Remove firstboot script as init
     sed -i "s|subvol=\S*|subvol=/${SNAPSHOT_NAME}|
+            s|${OLD_DISKID}|${NEW_DISKID}|
             s| init=\S*||
             s| quiet||" \
         "${SNAPSHOT_TEMP}/boot-save/cmdline.txt"
 
+    # Finalize by renaming from root-temp
     mv "${SNAPSHOT_TEMP}" "${SNAPSHOT_PATH}"
     printf "Created new installation as subvolume %s\n" "${SNAPSHOT_NAME}"
 
@@ -216,9 +228,9 @@ function stage {
 
     mount_btrfs_top
 
-    cp /boot/config.txt /boot/tryboot.txt
-    echo "os_prefix=tryboot" >> /boot/tryboot.txt
     rsync -a "${SUBVOL}/boot-save/" /boot/tryboot
+    cp /boot/tryboot/config.txt /boot/tryboot.txt
+    echo -e "\nos_prefix=tryboot/" >> /boot/tryboot.txt
     printf "Staged %s. Run the installation with '%s reboot'.\n" "${SUBVOL}" ${0##*/}
 }
 
