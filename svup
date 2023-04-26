@@ -7,31 +7,31 @@ set -e
 BTRFS_TOP_MOUNT="/root/btrfs-top-lvl"
 
 function usage_install {
-    printf "%s install [-s] [-b BASE] IMAGE\n" ${0##*/}
+    printf "%s install [-s] [-b BASE] IMAGE\n" "${0##*/}"
 }
 
 function usage_list {
-    printf "%s list\n" ${0##*/}
+    printf "%s list\n" "${0##*/}"
 }
 
 function usage_prune {
-    printf "%s prune [-k KEEP]\n" ${0##*/}
+    printf "%s prune [-k KEEP]\n" "${0##*/}"
 }
 
 function usage_stage {
-    printf "%s stage [-f] SNAPSHOT\n" ${0##*/}
+    printf "%s stage [-f] SNAPSHOT\n" "${0##*/}"
 }
 
 function usage_unstage {
-    printf "%s unstage\n" ${0##*/}
+    printf "%s unstage\n" "${0##*/}"
 }
 
 function usage_reboot {
-    printf "%s reboot\n" ${0##*/}
+    printf "%s reboot\n" "${0##*/}"
 }
 
 function usage_persist {
-    printf "%s persist\n" ${0##*/}
+    printf "%s persist\n" "${0##*/}"
 }
 
 function usage_all {
@@ -93,7 +93,7 @@ function install_img {
                 ;;
         esac
     done
-    shift $((${OPTIND} - 1))
+    shift $((OPTIND - 1))
     unset OPTIND
 
     if [[ $# != 1 ]]; then
@@ -121,12 +121,6 @@ function install_img {
         echo "Partial installation from a previous aborted run found. Deleting..."
         btrfs subvolume delete "${SNAPSHOT_TEMP}"
     fi
-
-    local LAST_SV=$(ls -vd "${BTRFS_TOP_MOUNT}"/root* | tail -n 1)
-    local N_LAST="${LAST_SV##*root}"
-
-    local SNAPSHOT_NAME="root$((N_LAST + 1))"
-    local SNAPSHOT_PATH="${BTRFS_TOP_MOUNT}/${SNAPSHOT_NAME}"
     btrfs subvolume snapshot "${BASE}" "${SNAPSHOT_TEMP}"
 
     # Copy over changes
@@ -140,9 +134,16 @@ function install_img {
 
     # Modify /etc/fstab and /boot/cmdline.txt:
     # Set the correct subvolume and use the current PARTUUID
-    local OLD_DISKID=$(grep -oP "(?<=PARTUUID=)[0-9a-f]+(?=.*\s/\s)" \
-        "${SNAPSHOT_TEMP}/etc/fstab" | head -n 1)
-    local NEW_DISKID=$(lsblk -no PTUUID "${ROOT_DEV}")
+    local OLD_DISKID
+    local NEW_DISKID
+    OLD_DISKID=$(grep -oP "(?<=PARTUUID=)[0-9a-f]+(?=.*\s/\s)" "${SNAPSHOT_TEMP}/etc/fstab" | head -n 1)
+    NEW_DISKID=$(lsblk -no PTUUID "${ROOT_DEV}")
+
+    # Find previous highest subvolume number and increment by 1
+    local LAST_SV
+    LAST_SV="$(find "${BTRFS_TOP_MOUNT}" -maxdepth 1 -name "root*" -printf "%f\n" | sort -rV | head -n 1)"
+    local N_LAST="${LAST_SV#root}"
+    local SNAPSHOT_NAME="root$((N_LAST + 1))"
 
     sed -i "s|${OLD_DISKID}|${NEW_DISKID}|
             s|subvol=/root|subvol=/${SNAPSHOT_NAME}|" \
@@ -155,7 +156,7 @@ function install_img {
         "${SNAPSHOT_TEMP}/boot-save/cmdline.txt"
 
     # Finalize by renaming from root-temp
-    mv "${SNAPSHOT_TEMP}" "${SNAPSHOT_PATH}"
+    mv "${SNAPSHOT_TEMP}" "${BTRFS_TOP_MOUNT}/${SNAPSHOT_NAME}"
     printf "Created new installation as subvolume %s\n" "${SNAPSHOT_NAME}"
 
     trap - ERR
@@ -207,7 +208,7 @@ function stage {
                 ;;
         esac
     done
-    shift $((${OPTIND} - 1))
+    shift $((OPTIND - 1))
     unset OPTIND
 
     if [[ $# != 1 ]]; then
@@ -231,7 +232,7 @@ function stage {
     rsync -a "${SUBVOL}/boot-save/" /boot/tryboot
     cp /boot/tryboot/config.txt /boot/tryboot.txt
     echo -e "\nos_prefix=tryboot/" >> /boot/tryboot.txt
-    printf "Staged %s. Run the installation with '%s reboot'.\n" "${SUBVOL}" ${0##*/}
+    printf "Staged %s. Run the installation with '%s reboot'.\n" "${SUBVOL}" "${0##*/}"
 }
 
 function unstage {
@@ -267,7 +268,7 @@ do
     esac
 done
 
-shift $((${OPTIND} - 1))
+shift $((OPTIND - 1))
 unset OPTIND
 
 if [[ "${VERBOSE}" == 1 ]]; then
@@ -282,21 +283,21 @@ FUNCTION=$1
 shift
 
 case ${FUNCTION} in
-    install) install_img $@
+    install) install_img "$@"
         ;;
-    list) list_images $@
+    list) list_images "$@"
         ;;
-    prune) prune_subvolumes $@
+    prune) prune_subvolumes "$@"
         ;;
-    stage) stage $@
+    stage) stage "$@"
         ;;
-    unstage) unstage $@
+    unstage) unstage "$@"
         ;;
-    reboot) boot_into $@
+    reboot) boot_into "$@"
         ;;
-    persist) persist $@
+    persist) persist "$@"
         ;;
-    *) printf "Function ${FUNCTION} not recognized\n" >&2
+    *) printf "Function %s not recognized\n" "${FUNCTION}" >&2
         exit 2
         ;;
 esac
