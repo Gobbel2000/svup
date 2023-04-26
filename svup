@@ -7,7 +7,7 @@ set -e
 BTRFS_TOP_MOUNT="/root/btrfs-top-lvl"
 
 function usage_install {
-    printf "%s install [-s] [-b BASE] IMAGE\n" "${0##*/}"
+    printf "%s install [-s] [-b BASE] [-f FILTER] IMAGE\n" "${0##*/}"
 }
 
 function usage_list {
@@ -19,7 +19,7 @@ function usage_prune {
 }
 
 function usage_stage {
-    printf "%s stage [-f] SNAPSHOT\n" "${0##*/}"
+    printf "%s stage [-f] INSTALLATION\n" "${0##*/}"
 }
 
 function usage_unstage {
@@ -37,7 +37,7 @@ function usage_persist {
 function usage_all {
     cat <<EOF
 Usage:
-${0##*/} [global] <command> [<args>]
+${0##*/} [<global>] <command> [<args>]
 
 Global Options:
     -h  Show this help message
@@ -50,15 +50,21 @@ $(usage_install)
     -s also stages that installation afterwards.
     A different base subvolume can be specified with -b which will be the basis
     for the snapshot instead of the currently running subvolume.
+    -f specifies a filter file for rsync to use. Default:
+    '/usr/share/svup/upgrade.filter' in the new image
 $(usage_list)
     List all currently installed images
 $(usage_prune)
     Prune subvolumes with unused installations, keeping KEEP newest volumes.
     Defaults to keeping 3 volumes.
 $(usage_stage)
-    Prepare a snapshot for booting with ${0##*/} reboot.
+    Prepare a subvolume for booting with '${0##*/} reboot'.
     If -f (force) is specified, overwrite any existing configuration for
     another subvolume.
+
+    INSTALLATION can either be just the name of a subvolume, for example
+    'root5', or a full path pointing to the subvolume, for example
+    '/root/btrfs-top-lvl/root5'.
 $(usage_unstage)
     Unstage the currently staged version again
 $(usage_reboot)
@@ -78,15 +84,31 @@ function mount_btrfs_top {
     fi
 }
 
+function find_subvolume {
+    # Accept both a subvolume name (i.e. 'root5') or a full path
+    if [[ -d "$1" ]]; then
+        SUBVOL="$1"
+    elif [[ -d "${BTRFS_TOP_MOUNT}/$1" ]]; then
+        SUBVOL="${BTRFS_TOP_MOUNT}/$1"
+    else
+        printf "Could not find subvolume %s\n" "$1" >&2
+        exit 3
+    fi
+    echo "${SUBVOL}"
+}
+
 function install_img {
     local STAGE=0
     local BASE="/"
-    while getopts 'sb:' OPTION
+    local FILTER=""
+    while getopts 'sb:f:' OPTION
     do
         case ${OPTION} in
             s) STAGE=1
                 ;;
             b) BASE="${OPTARG}"
+                ;;
+            f) FILTER="${OPTARG}"
                 ;;
             ?) printf "Usage:\n%s\n" "$(usage_install)" >&2
                 exit 2
@@ -121,11 +143,13 @@ function install_img {
         echo "Partial installation from a previous aborted run found. Deleting..."
         btrfs subvolume delete "${SNAPSHOT_TEMP}"
     fi
-    btrfs subvolume snapshot "${BASE}" "${SNAPSHOT_TEMP}"
+    btrfs subvolume snapshot "$(find_subvolume "${BASE}")" "${SNAPSHOT_TEMP}"
+
+    FILTER="${FILTER:-${SNAPSHOT_TEMP}/usr/share/svup/upgrade.filter}"
 
     # Copy over changes
     rsync --delete --inplace -aAXHx \
-        -f ". ${SNAPSHOT_TEMP}/usr/share/svup/upgrade.filter" \
+        -f ". ${FILTER}" \
         --info=stats2,progress2,misc1,flist0 \
         "${IMAGE_MOUNT}/" "${SNAPSHOT_TEMP}"
 
@@ -141,7 +165,7 @@ function install_img {
 
     # Find previous highest subvolume number and increment by 1
     local LAST_SV
-    LAST_SV="$(find "${BTRFS_TOP_MOUNT}" -maxdepth 1 -name "root*" -printf "%f\n" | sort -rV | head -n 1)"
+    LAST_SV="$(find "${BTRFS_TOP_MOUNT}" -maxdepth 1 -regex ".*/root[0-9]*" -printf "%f\n" | sort -rV | head -n 1)"
     local N_LAST="${LAST_SV#root}"
     local SNAPSHOT_NAME="root$((N_LAST + 1))"
 
@@ -156,7 +180,7 @@ function install_img {
         "${SNAPSHOT_TEMP}/boot-save/cmdline.txt"
 
     # Finalize by renaming from root-temp
-    mv "${SNAPSHOT_TEMP}" "${BTRFS_TOP_MOUNT}/${SNAPSHOT_NAME}"
+    mv -T "${SNAPSHOT_TEMP}" "${BTRFS_TOP_MOUNT}/${SNAPSHOT_NAME}"
     printf "Created new installation as subvolume %s\n" "${SNAPSHOT_NAME}"
 
     trap - ERR
@@ -215,8 +239,12 @@ function stage {
         printf "No subvolume to stage specified. Usage:\n%s\n" "$(usage_stage)" >&2
         exit 2
     fi
-    local SUBVOL=$1
 
+    mount_btrfs_top
+    local SUBVOL
+    SUBVOL="$(find_subvolume "$1")"
+
+    # Check if something is already staged
     if [[ -f /boot/tryboot.txt ]]; then
         if [[ ${FORCE} == 1 ]]; then
             echo "A subvolume is already staged, overwriting..."
@@ -226,8 +254,6 @@ function stage {
             exit 2
         fi
     fi
-
-    mount_btrfs_top
 
     rsync -a "${SUBVOL}/boot-save/" /boot/tryboot
     cp /boot/tryboot/config.txt /boot/tryboot.txt

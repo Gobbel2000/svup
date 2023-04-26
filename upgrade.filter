@@ -1,16 +1,22 @@
 # Allow user configuration to add or override any filters
 . /etc/svup/user.filter
 
++ /etc/
 + /etc/fstab
 
++ /etc/systemd/
++ /etc/systemd/system/
 + /etc/systemd/system/klipper.service
 + /etc/systemd/system/start_xorg.service
-+ /etc/Networkmanager/NetworkManager.conf
-+ /etc/X11/Xwrapper.config
 
++ /etc/Networkmanager/
++ /etc/Networkmanager/NetworkManager.conf
++ /etc/X11/
++ /etc/X11/Xwrapper.config
++ /etc/X11/xorg.conf.d/
 + /etc/X11/xorg.conf.d/00-monitor.conf
 + /etc/X11/xorg.conf.d/10-dpms.conf
 + /etc/X11/xorg.conf.d/40-libinput.conf
 
 # Keep everything in /etc untouched by default, with exceptions listed above
-- /etc/
+- /etc/**
