@@ -4,14 +4,14 @@
 set -e
 
 # Mountpoint for top-level btrfs subvolume, must be listed in /etc/fstab
-BTRFS_TOP_MOUNT="/root/btrfs-top-lvl"
+BTRFS_MOUNT="/root/btrfs-top-lvl"
 
 function usage_install {
-    printf "%s install [-s] [-b BASE] [-f FILTER] IMAGE\n" "${0##*/}"
+    printf "%s install [-s] [-b INSTALLATION] [-f FILTER] IMAGE\n" "${0##*/}"
 }
 
 function usage_list {
-    printf "%s list\n" "${0##*/}"
+    printf "%s list [-rs]\n" "${0##*/}"
 }
 
 function usage_prune {
@@ -46,32 +46,38 @@ Global Options:
 Usage of subcommands:
 
 $(usage_install)
-    Install IMAGE under a new snapshot.
-    -s also stages that installation afterwards.
-    A different base subvolume can be specified with -b which will be the basis
-    for the snapshot instead of the currently running subvolume.
-    -f specifies a filter file for rsync to use. Default:
-    '/usr/share/svup/upgrade.filter' in the new image
+    Install IMAGE file under a new snapshot.
+    -s  Directly stage that installation afterwards.
+    -b  Specifies a different base subvolume which will be the basis for the
+        snapshot instead of the currently running subvolume.
+    -f  Filter file for rsync to use.
+        Default: 'usr/share/svup/upgrade.filter' in the new image.
 $(usage_list)
-    List all currently installed images
+    List the names of all available installed subvolumes.
+    -r  Print only the running subvolume.
+    -s  Print only the staged subvolume. If nothing is staged, exit with code 9.
 $(usage_prune)
-    Prune subvolumes with unused installations, keeping KEEP newest volumes.
-    Defaults to keeping 3 volumes.
+    Prune oldest subvolumes with unused installations. The currently running
+    or staged subvolume will be skipped and never deleted.
+    -d  Dry run. Only print the names of subvolumes that would be deleted, but
+        don't do anything.
+    -k  How many subvolumes to keep. Staged and running sobvolumes are not
+        counted, so specifying 0 would delete all "unused" subvolumes.
+        Default: 2.
 $(usage_stage)
     Prepare a subvolume for booting with '${0##*/} reboot'.
-    If -f (force) is specified, overwrite any existing configuration for
-    another subvolume.
-
-    INSTALLATION can either be just the name of a subvolume, for example
-    'root5', or a full path pointing to the subvolume, for example
-    '/root/btrfs-top-lvl/root5'.
+    -f  Force. If any installation is already staged, allow overwriting it.
 $(usage_unstage)
-    Unstage the currently staged version again
+    Unstage the currently staged version again.
 $(usage_reboot)
-    Try booting into the staged version
+    Try booting into the staged version. Fails if nothing is currently staged.
 $(usage_persist)
     Confirm that the new version works and make it persistent across regular
     reboots.
+
+INSTALLATION can either be just the name of a subvolume, for example
+'root5', or a full path pointing to the subvolume, for example
+'${BTRFS_MOUNT}/root5'.
 EOF
 }
 
@@ -79,22 +85,21 @@ EOF
 # Ensures btrfs top-level subvolume is mounted
 function mount_btrfs_top {
     ROOT_DEV="$(findmnt -nv -o source /)"
-    if ! findmnt "${BTRFS_TOP_MOUNT}" > /dev/null; then
-        mount -t btrfs "${ROOT_DEV}" "${BTRFS_TOP_MOUNT}"
+    if ! findmnt "${BTRFS_MOUNT}" > /dev/null; then
+        mount -t btrfs "${ROOT_DEV}" "${BTRFS_MOUNT}"
     fi
 }
 
 function find_subvolume {
     # Accept both a subvolume name (i.e. 'root5') or a full path
     if [[ -d "$1" ]]; then
-        SUBVOL="$1"
-    elif [[ -d "${BTRFS_TOP_MOUNT}/$1" ]]; then
-        SUBVOL="${BTRFS_TOP_MOUNT}/$1"
+        echo "$1"
+    elif [[ -d "${BTRFS_MOUNT}/$1" ]]; then
+        echo "${BTRFS_MOUNT}/$1"
     else
         printf "Could not find subvolume %s\n" "$1" >&2
         exit 3
     fi
-    echo "${SUBVOL}"
 }
 
 function install_img {
@@ -138,7 +143,7 @@ function install_img {
 
     mount_btrfs_top
 
-    local SNAPSHOT_TEMP="${BTRFS_TOP_MOUNT}/root-temp"
+    local SNAPSHOT_TEMP="${BTRFS_MOUNT}/root-temp"
     if [[ -e "${SNAPSHOT_TEMP}" ]]; then
         echo "Partial installation from a previous aborted run found. Deleting..."
         btrfs subvolume delete "${SNAPSHOT_TEMP}"
@@ -160,12 +165,12 @@ function install_img {
     # Set the correct subvolume and use the current PARTUUID
     local OLD_DISKID
     local NEW_DISKID
-    OLD_DISKID=$(grep -oP "(?<=PARTUUID=)[0-9a-f]+(?=.*\s/\s)" "${SNAPSHOT_TEMP}/etc/fstab" | head -n 1)
+    OLD_DISKID=$(grep -oP -m 1 "(?<=PARTUUID=)[0-9a-f]+(?=.*\s/\s)" "${SNAPSHOT_TEMP}/etc/fstab")
     NEW_DISKID=$(lsblk -no PTUUID "${ROOT_DEV}")
 
     # Find previous highest subvolume number and increment by 1
     local LAST_SV
-    LAST_SV="$(find "${BTRFS_TOP_MOUNT}" -maxdepth 1 -regex ".*/root[0-9]*" -printf "%f\n" | sort -rV | head -n 1)"
+    LAST_SV="$(find "${BTRFS_MOUNT}" -maxdepth 1 -regex ".*/root[0-9]*" -printf "%f\n" | sort -rV | head -n 1)"
     local N_LAST="${LAST_SV#root}"
     local SNAPSHOT_NAME="root$((N_LAST + 1))"
 
@@ -180,7 +185,7 @@ function install_img {
         "${SNAPSHOT_TEMP}/boot-save/cmdline.txt"
 
     # Finalize by renaming from root-temp
-    mv -T "${SNAPSHOT_TEMP}" "${BTRFS_TOP_MOUNT}/${SNAPSHOT_NAME}"
+    mv -T "${SNAPSHOT_TEMP}" "${BTRFS_MOUNT}/${SNAPSHOT_NAME}"
     printf "Created new installation as subvolume %s\n" "${SNAPSHOT_NAME}"
 
     trap - ERR
@@ -197,16 +202,41 @@ function _clean_install {
 }
 
 function list_images {
+    local STAGED
+    while getopts 'rs' OPTION
+    do
+        case ${OPTION} in
+            r) running_subvol
+                exit 0
+                ;;
+            s) STAGED="$(staged_subvol)"
+                if [[ -z "${STAGED}" ]]; then
+                    echo "No subvolume staged currently" >&2
+                    exit 9
+                else
+                    echo "${STAGED}"
+                fi
+                exit 0
+                ;;
+            ?) printf "Usage:\n%s\n" "$(usage_list)" >&2
+                exit 2
+                ;;
+        esac
+    done
+
     mount_btrfs_top
     #TODO: Print additional information
-    find "${BTRFS_TOP_MOUNT}" -maxdepth 1 -name "root*" -printf "%f\n"
+    find "${BTRFS_MOUNT}" -maxdepth 1 -regex ".*/root[0-9]*" -printf "%f\n" | sort -V
 }
 
 function prune_subvolumes {
-    local N_KEEP=3
-    while getopts 'k:' OPTION
+    local N_KEEP=2
+    local CMD=(btrfs subvolume delete --commit-after)
+    while getopts 'dk:' OPTION
     do
         case ${OPTION} in
+            d) CMD=(printf "%s\n")
+                ;;
             k) N_KEEP="${OPTARG}"
                 ;;
             ?) printf "Usage:\n%s\n" "$(usage_prune)" >&2
@@ -215,14 +245,37 @@ function prune_subvolumes {
         esac
     done
 
+    local STAGED
+    local RUNNING
+    STAGED="$(staged_subvol)"
+    RUNNING="$(running_subvol)"
+
     mount_btrfs_top
-    #TODO: Make sure not to delete running or staged volumes
-    btrfs subvolume delete --commit-after $(ls "${BTRFS_TOP_MOUNT}" | tail -n "+${N_KEEP}")
+    find "${BTRFS_MOUNT}" -maxdepth 1 -regex ".*/root[0-9]*" \   # List installations
+            \! -name "${STAGED}" \! -name "${RUNNING}" -print0 | # Filter out staged and running
+        sort -zV |
+        head -zn "-${N_KEEP}" |  # Remove N_KEEP newest
+        xargs -0r "${CMD[@]}"    # Delete (or print with -d)
+}
+
+function staged_subvol {
+    if [[ -f /boot/tryboot/cmdline.txt ]]; then
+        _get_root_subvol /boot/tryboot/cmdline.txt
+    fi
+}
+
+function running_subvol {
+    _get_root_subvol /boot/cmdline.txt
+}
+
+function _get_root_subvol {
+    # Parse a kernel command line for the root subvolume name
+    grep -oP -m 1 "rootflags=subvol=(\S*/)?\K[^/\s]*" "$1"
 }
 
 function stage {
     local FORCE=0
-    while getopts 'f' OPTION
+    while getopts 'fp' OPTION
     do
         case ${OPTION} in
             f) FORCE=1
@@ -262,11 +315,16 @@ function stage {
 }
 
 function unstage {
+    #TODO: Save tryboot contents back into boot-save
     rm -rf /boot/tryboot
     rm -f /boot/tryboot.txt
 }
 
 function boot_into {
+    if [[ ! -f /boot/tryboot.txt ]]; then
+        printf "No installation staged. Use '%s' first.\n" "$(usage_stage)" >&2
+        exit 4
+    fi
     echo "Rebooting"
     reboot '0 tryboot'
 }
@@ -277,14 +335,9 @@ function persist {
     printf "Installation will now persist across regular reboots"
 }
 
-VERBOSE=0
-QUIET=0
-
-while getopts 'vh' OPTION
+while getopts 'h' OPTION
 do
     case ${OPTION} in
-        v) VERBOSE=1
-            ;;
         h) usage_all
             exit 0
             ;;
@@ -296,14 +349,6 @@ done
 
 shift $((OPTIND - 1))
 unset OPTIND
-
-if [[ "${VERBOSE}" == 1 ]]; then
-    echo "Verbose!"
-fi
-
-if [[ "${QUIET}" == 1 ]]; then
-    echo "quiet"
-fi
 
 FUNCTION=$1
 shift
