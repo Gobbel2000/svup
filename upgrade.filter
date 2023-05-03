@@ -20,3 +20,7 @@
 
 # Keep everything in /etc untouched by default, with exceptions listed above
 - /etc/**
+
+- /var/cache/
+- /var/log/
+- /var/tmp/
