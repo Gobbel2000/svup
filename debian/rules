@@ -1,3 +1,10 @@
 #!/usr/bin/make -f
 %:
 	dh $@
+
+# Specifically use xz compression for the final package so that the package can
+# be built on Ubuntu and installed on Debian: Ubuntu uses zstd for package
+# compression by default since 21.10, but Debian's dpkg-deb supports zstd only
+# starting with Debian 11 (Bookworm).
+override_dh_builddeb:
+	dh_builddeb -- -Zxz
