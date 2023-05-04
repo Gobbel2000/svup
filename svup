@@ -200,7 +200,7 @@ function install_img {
     export SNAPSHOT_NAME="root$((N_LAST + 1))"
 
     sed -i "s|${OLD_DISKID}|${NEW_DISKID}|
-            s|subvol=/root|subvol=${SNAPSHOT_NAME}|" \
+            s|\(\s/\s.*subvol=\)[^, ]\+|\1${SNAPSHOT_NAME}|" \
         "${SNAPSHOT_ROOT}/etc/fstab"
     # Remove firstboot script as init
     sed -i "s|subvol=\S*|subvol=${SNAPSHOT_NAME}|
