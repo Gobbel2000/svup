@@ -1,0 +1,373 @@
+.\"
+.TH SVUP 8 2023-05-10 "svup 0.1.0"
+.SH NAME
+svup \- upgrade the operating system from a disk image file
+.SH SYNOPSIS
+.B svup
+<command> [<options>] | \-h
+.SH DESCRIPTION
+Svup is a bash script that performs full root filesystem upgrades by utilizing
+btrfs subvolumes.
+The name is short for
+.BR S ub v "olume " Up grade.
+The upgrade is provided in the form of a raw disk image file
+whose contents are then transferred onto a snapshot
+of the current root filesystem (see
+.B install
+subcommand).
+.PP
+Then
+.B svup stage
+configures the boot loader to boot into the filesystem
+containing the new upgrades.
+Currently only the Raspberry Pi bootloader is supported.
+.SS System layout requirements
+A btrfs-formatted root filesystem is required.
+As in the standard Raspberry Pi OS layout all boot files must be
+in a separate VFAT partition mounted under
+.I /boot.
+It is recommended to separate the
+.I /home
+directory out into either its own partition
+or a subvolume of the main btrfs filesystem.
+That way the included user data will never be touched by upgrades.
+All other root directories should be inside the root subvolume.
+.PP
+The same requirements apply to the upgrade image.
+.SS Filters for persisting files
+Many of the files in the root subvolume which should be replaced by the image
+must be persisted to keep a functioning system across upgrades.
+This includes for example SSH keys
+.RI ( /etc/ssh ),
+user passwords
+.RI ( /etc/passwd " and " /etc/shadow ),
+system logs
+.RI ( /var/log )
+and potentially various system configuration files in
+.I /etc.
+To prevent the upgrade from replacing them with default files
+or deleting added files in the installation process,
+.BR rsync (1)
+filters are used to limit which files and directories are transferred
+from the update.
+See the
+.B install
+subcommand for further details on this process.
+.PP
+Default filter rules are read from
+.I /usr/share/svup/upgrade.filter
+.B inside the upgrade image.
+This allows the upgrade itself to control how it is applied.
+All contents of
+.I /etc
+are excluded by this file.
+System configuration files which the upgrade should supply
+are explicitly included as an exception to this rule.
+View the contents of that file to see all default rules,
+but keep in mind that the filters that will actually be used
+are taken out of the upgrade image and might differ slightly.
+.PP
+Additional filter rules can be written in
+.I /etc/svup/user.filter.
+Any rules in that file have higher precedence over rules in the default file
+and can thus be used to override them.
+.PP
+See the FILTER RULES section of
+.BR rsync (1)
+for further details on the syntax and semantics of these files.
+.SS Reliable booting with tryboot
+In order to maintain reliable operation
+and not end up with an unbootable system, the
+.UR https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#fail-safe-os-updates-tryboot
+tryboot feature
+.UE
+of the Raspberry Pi firmware is used.
+This means that if an update fails to boot,
+the bootloader falls back to the previous installation.
+.B setup
+configures everything required for tryboot.
+To try out the staged installation with this feature, call
+.B svup reboot.
+After verifying that everything works as expected, run
+.B svup persist
+to set the staged installation to be used on regular reboots.
+.PP
+It is possible to circumvent this mechanism by running
+.B persist
+before rebooting, but doing so is not recommended
+as you may be left with an unbootable system if anything went wrong.
+.SH SUBCOMMANDS
+.TP 4
+.BR install " [\-s] [\-b <subvolume>] [\-f <filter>] <image>"
+.RS 4
+Install
+.I image
+under a new subvolume.
+The steps performed are:
+.IP (1) 4
+The
+.I image
+is mounted using
+.BR losetup (8).
+.PD 0
+.IP (2) 4
+A snapshot of the current root subvolume (or
+.IR base )
+is made.
+.IP (3) 4
+Contents of the image's root subvolume are copied into the snapshot.
+At this stage the filter files are used.
+.IP (4) 4
+The contents of the
+.I boot
+partition on the image are copied into a new
+.I /boot-save
+directory on the snapshot.
+These boot files are used during
+.B svup stage.
+.PD
+.PP
+After successful termination a new root subvolume will have been created that
+can be configured for booting using
+.B svup stage.
+.IP <image> 4
+Path to a raw disk image file that should be installed.
+.IP \-s 4
+Directly stage the installation when done. Any already staged installation is
+overwritten (i.e. the \-f option of
+.BR stage ).
+.IP "\-b <subvolume>" 4
+Instead of snapshotting the currently running subvolume (mounted at
+.IR / ),
+snapshot
+.I subvolume
+as a base for the new installation.
+.IP
+.I subvolume
+can be either a regular path pointing to a subvolume
+or just its name under the top-level btrfs subvolume,
+as printed by
+.B svup list.
+.IP "\-f <filter>" 4
+Specify a different filter file to use for transferring the update into the
+snapshot. By default
+.I usr/share/svup/upgrade.filter
+inside the upgrade image is used.
+This option can be useful when installing an image without
+.B svup
+installed and thus missing the default filter file.
+.RE
+.TP 4
+.BR list " [\-r | \-s | \-i]"
+.RS 4
+List the names of all subvolumes containing an installation
+of the root filesystem separated by newlines.
+.IP \-r 4
+Print only the currently running subvolume.
+.IP \-s 4
+Print only the staged subvolume.
+Boot into using
+.B svup reboot.
+If nothing is staged, an error message is printed to stderr
+and exit code 1 is returned.
+.IP \-i 4
+Print only the currently installed subvolume.
+Regular reboots will boot into this installation.
+.RE
+.TP 4
+.BR prune " [\-d] [\-k <keep>]"
+.RS 4
+Prune oldest subvolumes with unused installations.
+The currently running, staged or installed subvolumes
+will be skipped and never deleted.
+.IP \-d 4
+Dry run.
+Only print the names of subvolumes that would be deleted,
+but don't do anything.
+.IP "\-k <keep>" 4
+How many subvolumes to keep.
+Staged and running sobvolumes are not counted,
+so specifying 0 would delete all "unused" subvolumes.
+.IP
+Default: 2.
+.RE
+.TP 4
+.BR stage " [\-f] <installation>"
+.RS 4
+Prepare a subvolume for booting with
+.B svup reboot.
+The boot files in the
+.I /boot-save
+directory of the
+.I installation
+subvolume are copied into a subdirectory of
+.I /boot.
+Then
+.I /boot/tryboot.txt
+is set up to use that subdirectory by way of the
+.I os_prefix
+option.
+.IP <installation> 4
+The subvolume holding the installation to stage.
+.IP
+.I subvolume
+can be either a regular path pointing to a subvolume
+or just its name under the top-level btrfs subvolume,
+as printed by
+.B svup list.
+yes
+.IP \-f 4
+Force.
+If any installation is already staged, allow overwriting it.
+.RE
+.TP 4
+.B unstage
+Unstage the currently staged version again.
+.TP
+.B reboot
+Try booting into the staged version. Fails if nothing is currently staged.
+.TP
+.B persist
+Confirm that the new version works and make it persistent across regular
+reboots.
+.SH HOOK SCRIPTS
+See the EXAMPLES section for example scripts.
+.SS Install hooks
+At the end of the
+.B install
+function, any programs found in
+.I /etc/svup/install.d/
+are executed
+which can be used to further manipulate new installations.
+Remember to set any scripts as executable or they won't run.
+.PP
+The following environment variables are available in the hook programs:
+.TP
+.B IMAGE_PATH
+Path to the upgrade image file that is used for the current installation.
+.TP
+.B IMAGE_MOUNT
+Mountpoint where the upgrade image is mounted at. Note that this is a read-only
+mount.
+.TP
+.B SNAPSHOT_ROOT
+Location of the snapshot holding the new upgrade. Any modifications to the new
+installations should be made under this directory.
+.TP
+.B SNAPSHOT_NAME
+Name of the snapshot holding the new upgrade.
+.SS Stage hooks
+After the
+.B stage
+function is complete, any programs found in
+.I /etc/svup/stage.d/
+are executed.
+.PP
+The following environment variables are available in the hook programs:
+.TP
+.B STAGE_SUBVOL
+Path to the subvolume that was staged.
+.SH EXIT STATUS
+The following list contains all exit codes that are returned by
+.B svup
+and what causes them.
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Unspecified error.
+.TP
+.B 2
+Argument error.
+.TP
+.B 3
+Subvolume not found.
+.TP
+.B 9
+No subvolume staged.
+.TP
+.B 10
+Subvolume already staged
+.RB ( stage
+without -f option).
+.TP
+.B 11
+Trying to bypass the tryboot feature in
+.B persist
+without explicitly setting the -f option.
+.SH FILES
+.TP
+.I /usr/share/svup/upgrade.filter
+Default filter rules for rsync.
+.TP
+.I /etc/svup/user.filter
+User-specified filters.
+.SH EXAMPLES
+.SS Upgrade workflow
+Assume an upgrade image has already been downloaded to
+.I upgrade.img
+A workflow for completing an update might look as follows:
+.PP
+.RS 4
+.EX
+.RB # " svup install upgrade.img"
+Created new installation as subvolume root2
+.RB # " svup stage root2"
+Staged root2.
+.RB # " svup reboot"
+.I [After rebooting and verifying that everything works:]
+.RB # " svup persist"
+Installation root2 will now persist across regular reboots.
+.EE
+.RE
+.SS Example hook scripts
+The following script adds the
+.I quiet
+kernel parameter to every new installation when written into
+.I /etc/svup/install.d/quiet
+and set as executable:
+.PP
+.RS 4
+.EX
+#!/bin/sh -e
+
+# boot files are saved in snapshots under /boot-save
+CMDLINE_FILE="${SNAPSHOT_ROOT}/boot-save/cmdline.txt"
+
+if ! grep -q "quiet" "${CMDLINE_FILE}"; then
+    sed -i "s|\\$| quiet|" "${CMDLINE_FILE}"
+fi
+.EE
+.RE
+.PP
+Some operations require running commands inside the new installation using
+.BR chroot (8).
+The following install hook installs the
+.I fortunes
+package using apt:
+.PP
+.RS 4
+.EX
+#!/bin/sh -e
+
+# Set up for chroot
+mount -t proc /proc "${SNAPSHOT_ROOT}/proc"
+mount -t sysfs /sys "${SNAPSHOT_ROOT}/sys"
+mount --bind /dev "${SNAPSHOT_ROOT}/dev"
+mount --bind /dev/pts "${SNAPSHOT_ROOT}/dev/pts"
+
+chroot "${SNAPSHOT_ROOT}" <<EOF
+apt-get update
+apt-get install --yes fortunes
+EOF
+
+umount "${SNAPSHOT_ROOT}/proc"
+umount "${SNAPSHOT_ROOT}/sys"
+umount -R "${SNAPSHOT_ROOT}/dev"
+.EE
+.RE
+.SH SEE ALSO
+.BR btrfs (8),
+.BR btrfs-subvolume (8),
+.BR rsync (1)
