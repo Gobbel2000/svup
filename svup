@@ -44,13 +44,13 @@ ${0##*/} [<global>] <command> [<args>]
 
 Global Options:
     -h  Show this help message
-    -v  Verbose output
 
 Usage of subcommands:
 
 $(usage_install)
     Install IMAGE file under a new snapshot.
-    -s  Directly stage that installation afterwards.
+    -s  Directly stage that installation afterwards. Already staged
+        installations are overwritten.
     -b  Specifies a different base subvolume which will be the basis for the
         snapshot instead of the currently running subvolume.
     -f  Filter file for rsync to use.
@@ -62,8 +62,8 @@ $(usage_list)
     -i  Print the instaged subvolume. This will will be booted after any
         regular reboot.
 $(usage_prune)
-    Prune oldest subvolumes with unused installations. The currently running
-    or staged subvolume will be skipped and never deleted.
+    Prune oldest subvolumes with unused installations. The currently running,
+    staged or installed subvolumes will be skipped and never deleted.
     -d  Dry run. Only print the names of subvolumes that would be deleted, but
         don't do anything.
     -k  How many subvolumes to keep. Staged and running sobvolumes are not
@@ -219,7 +219,7 @@ function install_img {
     _clean_install
 
     if [[ ${STAGE} == 1 ]]; then
-        stage "${SNAPSHOT_NAME}"
+        stage -f "${SNAPSHOT_NAME}"
     fi
 }
 
@@ -278,7 +278,7 @@ function prune_subvolumes {
     mount_btrfs_top
     find "${BTRFS_MOUNT}" -maxdepth 1 -regex ".*/root[0-9]*" \ # List installations
             \! -path "*${STAGED_SV:-IGNORE}" \! -path "*${RUNNING_SV}" \
-            \! -path "*${INSTALLED_SV}" -print0 | # Filter out staged and running
+            \! -path "*${INSTALLED_SV}" -print0 | # Filter out staged, running and installed
         sort -zV |
         head -zn "-${N_KEEP}" |  # Remove N_KEEP newest
         xargs -0r "${CMD[@]}"    # Delete (or print with -d)
@@ -286,7 +286,7 @@ function prune_subvolumes {
 
 function stage {
     local FORCE=0
-    while getopts 'fp' OPTION
+    while getopts 'f' OPTION
     do
         case ${OPTION} in
             f) FORCE=1
@@ -315,7 +315,7 @@ function stage {
             unstage
         else
             echo "A subvolume is already staged. Overwrite with -f" >&2
-            exit 2
+            exit 10
         fi
     fi
 
@@ -335,17 +335,36 @@ function unstage {
 function boot_into {
     if [[ ! -f /boot/tryboot.txt ]]; then
         printf "No installation staged. Use '%s' first.\n" "$(usage_stage)" >&2
-        exit 4
+        exit 9
     fi
     echo "Rebooting"
     reboot '0 tryboot'
 }
 
 function persist {
+    local FORCE=0
+    while getopts 'f' OPTION
+    do
+        case ${OPTION} in
+            f) FORCE=1
+                ;;
+            ?) printf "Usage:\n%s\n" "$(usage_stage)" >&2
+                exit 2
+                ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+    unset OPTIND
+
     subvol_status
     if [[ "${STAGED_SV#/}" != "${RUNNING_SV#/}" ]]; then
-        echo "Not in tryboot mode, cannot persist" >&2
-        exit 5
+        if [[ "${FORCE}" == 1 ]]; then
+            echo "Persisting installation without testing in tryboot. Proceed with caution."
+        else
+            echo -n "Persisting without testing an installation in tryboot mode first could leave your device unbootable." >&2
+            echo "To proceed anyway, use the -f option." >&2
+            exit 11
+        fi
     fi
 
     # Save current installation
@@ -365,7 +384,7 @@ do
         h) usage_all
             exit 0
             ;;
-        ?) printf "Invalid!\n" >&2
+        ?) printf "Usage:\n%s\n" "${0##*/} <command> [<args>] | -h" >&2
             exit 2
             ;;
     esac
@@ -374,7 +393,12 @@ done
 shift $((OPTIND - 1))
 unset OPTIND
 
-COMMAND=$1
+if [[ $# -lt 1 ]]; then
+    printf "ERROR: No command specified.\n\n%s\n" "$(usage_all)" >&2
+    exit 2
+fi
+
+COMMAND=${1:-o}
 shift
 
 case ${COMMAND} in
