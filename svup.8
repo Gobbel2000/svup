@@ -155,8 +155,7 @@ as a base for the new installation.
 .IP
 .I subvolume
 can be either a regular path pointing to a subvolume
-or just its name under the top-level btrfs subvolume,
-as printed by
+or just its name under the top-level btrfs subvolume, as printed by
 .B svup list.
 .IP "\-f <filter>" 4
 Specify a different filter file to use for transferring the update into the
@@ -202,7 +201,22 @@ so specifying 0 would delete all "unused" subvolumes.
 Default: 2.
 .RE
 .TP 4
-.BR stage " [\-f] <installation>"
+.BR delete " <subvolume>"
+.RS 4
+Delete the given subvolume.
+This is mostly just a wrapper around 'btrfs subvolume delete'
+that ensures that no currently running or installed subvolumes are deleted.
+When deleting a staged installation, it is unstaged first.
+.IP <subvolume> 4
+The subvolume to delete.
+.IP
+.I subvolume
+can be either a regular path pointing to a subvolume
+or just its name under the top-level btrfs subvolume, as printed by
+.B svup list.
+.RE
+.TP 4
+.BR stage " [\-f] <subvolume>"
 .RS 4
 Prepare a subvolume for booting with
 .B svup reboot.
@@ -217,15 +231,13 @@ Then
 is set up to use that subdirectory by way of the
 .I os_prefix
 option.
-.IP <installation> 4
+.IP <subvolume> 4
 The subvolume holding the installation to stage.
 .IP
 .I subvolume
 can be either a regular path pointing to a subvolume
-or just its name under the top-level btrfs subvolume,
-as printed by
+or just its name under the top-level btrfs subvolume, as printed by
 .B svup list.
-yes
 .IP \-f 4
 Force.
 If any installation is already staged, allow overwriting it.
@@ -306,6 +318,9 @@ without -f option).
 Trying to bypass the tryboot feature in
 .B persist
 without explicitly setting the -f option.
+.TP
+.B 12
+Trying to delete a running or installed subvolume.
 .SH FILES
 .TP
 .I /usr/share/svup/upgrade.filter

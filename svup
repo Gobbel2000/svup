@@ -47,6 +47,10 @@ function usage_prune {
     printf "%s prune [-d] [-k KEEP]\n" "${0##*/}"
 }
 
+function usage_delete {
+    printf "%s delete INSTALLATION\n" "${0##*/}"
+}
+
 function usage_stage {
     printf "%s stage [-f] INSTALLATION\n" "${0##*/}"
 }
@@ -95,6 +99,10 @@ $(usage_prune)
     -k  How many subvolumes to keep. Staged and running sobvolumes are not
         counted, so specifying 0 would delete all "unused" subvolumes.
         Default: 2.
+$(usage_delete)
+    Delete the given subvolume. This is essentially a wrapper around 'btrfs
+    subvolume delete' that ensures no running or installed subvolumes are
+    deleted and unstages staged subvolumes.
 $(usage_stage)
     Prepare a subvolume for booting with '${0##*/} reboot'.
     -f  Force. If any installation is already staged, allow overwriting it.
@@ -318,12 +326,34 @@ function prune_subvolumes {
 
     subvol_status
     mount_btrfs_top
-    find "${BTRFS_MOUNT}" -maxdepth 1 -regex ".*/root[0-9]*" \ # List installations
+    find "${BTRFS_MOUNT}" -maxdepth 1 -regex ".*/root[0-9]*" \
             \! -path "*${STAGED_SV:-IGNORE}" \! -path "*${RUNNING_SV}" \
             \! -path "*${INSTALLED_SV}" -print0 | # Filter out staged, running and installed
         sort -zV |
         head -zn "-${N_KEEP}" |  # Remove N_KEEP newest
         xargs -0r "${CMD[@]}"    # Delete (or print with -d)
+}
+
+function delete {
+    if [[ $# != 1 ]]; then
+        printf "No subvolume to delete specified. Usage:\n%s\n" "$(usage_delete)" >&2
+        exit 2
+    fi
+
+    subvol_status
+    mount_btrfs_top
+    local SUBVOL
+    SUBVOL="$(find_subvolume "$1")"
+
+    if [[ "${SUBVOL##*/}" == "${RUNNING_SV#/}" ||
+          "${SUBVOL##*/}" == "${INSTALLED_SV#/}" ]]; then
+        printf "%s is currently running or installed. Cannot delete.\n" "${SUBVOL}" >&2
+        exit 12
+    elif [[ "${SUBVOL##*/}" == "${STAGED_SV#/}" ]]; then
+        info "Unstaging staged subvolume %s" "${SUBVOL}"
+        unstage
+    fi
+    btrfs subvolume delete --commit-after "${SUBVOL}"
 }
 
 function stage {
@@ -459,6 +489,8 @@ case ${COMMAND} in
     list) list_images "$@"
         ;;
     prune) prune_subvolumes "$@"
+        ;;
+    delete) delete "$@"
         ;;
     stage) stage "$@"
         ;;
