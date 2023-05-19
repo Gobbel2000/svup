@@ -7,6 +7,32 @@ set -e
 BTRFS_MOUNT="/mnt/btrfs"
 
 
+# OUTPUT
+
+function out {
+    # shellcheck disable=SC2059
+    printf "$1\n" "${@:2}"
+}
+
+function debug {
+    if [[ ${VERBOSE} == 1 ]]; then
+        out "$@"
+    fi
+}
+
+function info {
+    if [[ ${TERSE} == 0 ]]; then
+        out "$@"
+    fi
+}
+
+function terse {
+    if [[ ${TERSE} == 1 ]]; then
+        out "$@"
+    fi
+}
+
+
 # HELP
 
 function usage_install {
@@ -170,19 +196,28 @@ function install_img {
 
     export SNAPSHOT_ROOT="${BTRFS_MOUNT}/root-temp"
     if [[ -e "${SNAPSHOT_ROOT}" ]]; then
-        echo "Partial installation from a previous aborted run found. Deleting..."
+        info "Partial installation from a previous aborted run found. Deleting..."
         btrfs subvolume delete "${SNAPSHOT_ROOT}"
     fi
     btrfs subvolume snapshot "$(find_subvolume "${BASE}")" "${SNAPSHOT_ROOT}"
 
     FILTER="${FILTER:-${SNAPSHOT_ROOT}/usr/share/svup/upgrade.filter}"
 
+    local RSYNC_INFO="none"
+    if [[ ${VERBOSE} == 1 ]]; then
+        RSYNC_INFO="stats2,progress2,misc1"
+    elif [[ ${TERSE} == 0 ]]; then
+        RSYNC_INFO="stats1,progress0,misc0"
+    fi
+
+    debug "Applying upgrade image..."
     # Copy over changes
     rsync --delete --inplace -aAXHx \
         -f ". ${FILTER}" \
-        --info=stats2,progress2,misc1,flist0 \
+        --info="${RSYNC_INFO}" \
         "${IMAGE_MOUNT}/" "${SNAPSHOT_ROOT}"
 
+    debug "Copying over boot files..."
     # Put /boot into /boot-save
     rsync -a "${IMAGE_MOUNT}/boot/" "${SNAPSHOT_ROOT}/boot-save"
 
@@ -202,18 +237,25 @@ function install_img {
     sed -i "s|${OLD_DISKID}|${NEW_DISKID}|
             s|\(\s/\s.*subvol=\)[^, ]\+|\1${SNAPSHOT_NAME}|" \
         "${SNAPSHOT_ROOT}/etc/fstab"
+
+    local CMDLINE="${SNAPSHOT_ROOT}/boot-save/cmdline.txt"
+    debug "Previous commandline: %s" "$(cat "${CMDLINE}")"
     # Remove firstboot script as init
     sed -i "s|subvol=\S*|subvol=${SNAPSHOT_NAME}|
             s|${OLD_DISKID}|${NEW_DISKID}|
             s| init=\S*||
             s| quiet||" \
-        "${SNAPSHOT_ROOT}/boot-save/cmdline.txt"
+        "${CMDLINE}"
+    debug "Changed commandline: %s" "$(cat "${CMDLINE}")"
 
-    run-parts -v /etc/svup/install.d || true
+    local RUN_FLAG=""
+    [[ ${TERSE} == 0 ]] && RUN_FLAG="-v"
+    run-parts ${RUN_FLAG} /etc/svup/install.d || true
 
     # Finalize by renaming from root-temp
     mv -T "${SNAPSHOT_ROOT}" "${BTRFS_MOUNT}/${SNAPSHOT_NAME}"
-    printf "Created new installation as subvolume %s\n" "${SNAPSHOT_NAME}"
+    info "Created new installation as subvolume %s\n" "${SNAPSHOT_NAME}"
+    terse "subvolume %s" "${SNAPSHOT_NAME}"
 
     trap - ERR
     _clean_install
@@ -311,7 +353,7 @@ function stage {
     # Check if something is already staged
     if [[ -f /boot/tryboot.txt ]]; then
         if [[ ${FORCE} == 1 ]]; then
-            echo "A subvolume is already staged, overwriting..."
+            info "A subvolume is already staged, overwriting..."
             unstage
         else
             echo "A subvolume is already staged. Overwrite with -f" >&2
@@ -323,8 +365,11 @@ function stage {
     cp /boot/tryboot/config.txt /boot/tryboot.txt
     echo -e "\nos_prefix=tryboot/" >> /boot/tryboot.txt
 
+    local RUN_FLAG=""
+    [[ ${TERSE} == 0 ]] && RUN_FLAG="-v"
     run-parts -v /etc/svup/stage.d || true
-    printf "Staged %s. Run the installation with '%s reboot'.\n" "${STAGE_SUBVOL}" "${0##*/}"
+    info "Staged %s. Run the installation with '%s reboot'." "${STAGE_SUBVOL}" "${0##*/}"
+    terse "staged %s" "${STAGE_SUBVOL}"
 }
 
 function unstage {
@@ -337,8 +382,8 @@ function boot_into {
         printf "No installation staged. Use '%s' first.\n" "$(usage_stage)" >&2
         exit 9
     fi
-    echo "Rebooting"
-    reboot '0 tryboot'
+    info "Rebooting"
+    reboot "0 tryboot"
 }
 
 function persist {
@@ -359,7 +404,7 @@ function persist {
     subvol_status
     if [[ "${STAGED_SV#/}" != "${RUNNING_SV#/}" ]]; then
         if [[ "${FORCE}" == 1 ]]; then
-            echo "Persisting installation without testing in tryboot. Proceed with caution."
+            info "Persisting installation without testing in tryboot. Proceed with caution."
         else
             echo -n "Persisting without testing an installation in tryboot mode first could leave your device unbootable." >&2
             echo "To proceed anyway, use the -f option." >&2
@@ -374,15 +419,22 @@ function persist {
 
     rsync -a /boot/tryboot/ /boot/ --delete-delay
     unstage
-    printf "Installation %s will now persist across regular reboots.\n" "${STAGED_SV}"
+    info "Installation %s will now persist across regular reboots." "${STAGED_SV}"
+    terse "persisted %s" "${STAGED_SV}"
 }
 
+TERSE=0
+VERBOSE=0
 
-while getopts 'h' OPTION
+while getopts 'htv' OPTION
 do
     case ${OPTION} in
         h) usage_all
             exit 0
+            ;;
+        t) TERSE=1
+            ;;
+        v) VERBOSE=1
             ;;
         ?) printf "Usage:\n%s\n" "${0##*/} <command> [<args>] | -h" >&2
             exit 2

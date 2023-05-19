@@ -4,7 +4,7 @@
 svup \- upgrade the operating system from a disk image file
 .SH SYNOPSIS
 .B svup
-<command> [<options>] | \-h
+[\-h] [\-v | \-t] <command> [<options>]
 .SH DESCRIPTION
 Svup is a bash script that performs full root filesystem upgrades by utilizing
 btrfs subvolumes.
@@ -25,7 +25,7 @@ Currently only the Raspberry Pi bootloader is supported.
 A btrfs-formatted root filesystem is required.
 As in the standard Raspberry Pi OS layout all boot files must be
 in a separate VFAT partition mounted under
-.I /boot.
+.IR /boot .
 It is recommended to separate the
 .I /home
 directory out into either its own partition
@@ -44,7 +44,7 @@ user passwords
 system logs
 .RI ( /var/log )
 and potentially various system configuration files in
-.I /etc.
+.IR /etc .
 To prevent the upgrade from replacing them with default files
 or deleting added files in the installation process,
 .BR rsync (1)
@@ -68,7 +68,7 @@ but keep in mind that the filters that will actually be used
 are taken out of the upgrade image and might differ slightly.
 .PP
 Additional filter rules can be written in
-.I /etc/svup/user.filter.
+.IR /etc/svup/user.filter .
 Any rules in that file have higher precedence over rules in the default file
 and can thus be used to override them.
 .PP
@@ -97,6 +97,16 @@ It is possible to circumvent this mechanism by running
 before rebooting, but doing so is not recommended
 as you may be left with an unbootable system if anything went wrong.
 .SH SUBCOMMANDS
+The following global options are available
+and must be positioned before the subcommand name.
+They affect all subcommands.
+.IP \-h 4
+Print a help message summarizing all options and exit.
+.IP \-v 4
+Verbose. Increase output for debugging.
+\-t and \-v cannot be used together.
+.IP \-t 4
+Terse. Reduces output with the intent of being easier machine-readable.
 .TP 4
 .BR install " [\-s] [\-b <subvolume>] [\-f <filter>] <image>"
 .RS 4
@@ -201,7 +211,7 @@ The boot files in the
 directory of the
 .I installation
 subvolume are copied into a subdirectory of
-.I /boot.
+.IR /boot .
 Then
 .I /boot/tryboot.txt
 is set up to use that subdirectory by way of the
