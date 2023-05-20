@@ -194,9 +194,15 @@ function install_img {
     LOOP_DEV=$(losetup -f -P --show "${IMAGE_PATH}")
 
     # Unmount image when encountering any error
-    trap 'echo "An error occured during installation, cleaning up"; _clean_install' ERR
+    trap 'echo "An error occured during installation, cleaning up"; _clean_install' EXIT
 
-    mkdir -p ${IMAGE_MOUNT}
+    mkdir -p "${IMAGE_MOUNT}"
+    # Try to recover if something is already mounted. This could for example be
+    # because a prvious run failed to clean up
+    if mountpoint -q "${IMAGE_MOUNT}"; then
+        debug "%s is already a mountpoint, unmounting..." "${IMAGE_MOUNT}"
+        umount -R "${IMAGE_MOUNT}"
+    fi
     mount -o ro,subvol=/root -t btrfs "${LOOP_DEV}p2" ${IMAGE_MOUNT}
     mount -o ro -t vfat "${LOOP_DEV}p1" "${IMAGE_MOUNT}/boot"
 
@@ -219,11 +225,18 @@ function install_img {
     fi
 
     debug "Applying upgrade image..."
-    # Copy over changes
+    # Allow preemptively stopping the rsync process if this script receives
+    # SIGTERM. While a regular process is running, all signals are ignored.
+    # 'wait' on the other hand immediately exits and calls the signal handler
+    # on SIGTERM.
+    trap 'kill ${RSYNC_PID}; wait ${RSYNC_PID}' TERM INT HUP
     rsync --delete --inplace -aAXHx \
         -f ". ${FILTER}" \
         --info="${RSYNC_INFO}" \
-        "${IMAGE_MOUNT}/" "${SNAPSHOT_ROOT}"
+        "${IMAGE_MOUNT}/" "${SNAPSHOT_ROOT}" &
+    RSYNC_PID=$!
+    wait ${RSYNC_PID}
+    trap - TERM INT HUP
 
     debug "Copying over boot files..."
     # Put /boot into /boot-save
@@ -265,7 +278,7 @@ function install_img {
     info "Created new installation as subvolume %s\n" "${SNAPSHOT_NAME}"
     terse "subvolume %s" "${SNAPSHOT_NAME}"
 
-    trap - ERR
+    trap - EXIT
     _clean_install
 
     if [[ ${STAGE} == 1 ]]; then
