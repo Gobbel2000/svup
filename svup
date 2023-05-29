@@ -226,10 +226,10 @@ function install_img {
 
     debug "Applying upgrade image..."
     # Allow preemptively stopping the rsync process if this script receives
-    # SIGTERM. While a regular process is running, all signals are ignored.
-    # 'wait' on the other hand immediately exits and calls the signal handler
-    # on SIGTERM.
-    trap 'kill ${RSYNC_PID}; wait ${RSYNC_PID}' TERM INT HUP
+    # SIGTERM (or SIGINT, SIGHUP). While a regular process is running, all
+    # signals are ignored. 'wait' on the other hand immediately exits and calls
+    # the signal handler on SIGTERM.
+    trap 'kill ${RSYNC_PID} &&  wait ${RSYNC_PID} || true' TERM INT HUP
     rsync --delete --inplace -aAXHx \
         -f ". ${FILTER}" \
         --info="${RSYNC_INFO}" \
@@ -426,7 +426,7 @@ function boot_into {
         exit 9
     fi
     info "Rebooting"
-    reboot "0 tryboot"
+    exec reboot "0 tryboot"
 }
 
 function persist {
