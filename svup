@@ -74,6 +74,9 @@ ${0##*/} [<global>] <command> [<args>]
 
 Global Options:
     -h  Show this help message
+    -v  Verbose. Increase output for debugging.
+    -t  Terse. Reduces output with the intent of being easier machine-readable.
+        -t and -v cannot be used together.
 
 Usage of subcommands:
 
@@ -317,8 +320,10 @@ function list_images {
     done
 
     mount_btrfs_top
-    #TODO: Print additional information
-    find "${BTRFS_MOUNT}" -maxdepth 1 -regex ".*/root[0-9]*" -printf "%f\n" | sort -V
+    # Print full path with -t
+    local format="%f\n"
+    [[ "${TERSE}" == 1 ]] && format="%p\n"
+    find "${BTRFS_MOUNT}" -maxdepth 1 -regex ".*/root[0-9]*" -printf "${format}" | sort -V
 }
 
 function prune_subvolumes {
@@ -449,7 +454,7 @@ function persist {
         if [[ "${FORCE}" == 1 ]]; then
             info "Persisting installation without testing in tryboot. Proceed with caution."
         else
-            echo -n "Persisting without testing an installation in tryboot mode first could leave your device unbootable." >&2
+            echo -n "Persisting without testing an installation in tryboot mode first could leave your device unbootable. " >&2
             echo "To proceed anyway, use the -f option." >&2
             exit 11
         fi
