@@ -192,8 +192,6 @@ function install_img {
     export IMAGE_PATH="$1"
     export IMAGE_MOUNT="/mnt/svup-image"
 
-    #TODO Image validation
-
     LOOP_DEV=$(losetup -f -P --show "${IMAGE_PATH}")
 
     # Unmount image when encountering any error
